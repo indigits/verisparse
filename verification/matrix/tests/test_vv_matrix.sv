@@ -1,4 +1,4 @@
-`include "verisparse.svp"
+`include "verisparse.svh"
 `include "verification/vv_logger.svh"
 
 // local imports

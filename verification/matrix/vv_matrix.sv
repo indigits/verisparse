@@ -1,4 +1,4 @@
-`include "verisparse.svp"
+`include "verisparse.svh"
 `ifndef MATRIX_PACKAGE
 `define MATRIX_PACKAGE
 package vs_matrix;

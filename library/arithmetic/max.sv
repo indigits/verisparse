@@ -3,7 +3,7 @@
 Various implementations for computing the max
 */
 
-`include "verisparse.svp"
+`include "verisparse.svh"
 
 
 module max_fp32(

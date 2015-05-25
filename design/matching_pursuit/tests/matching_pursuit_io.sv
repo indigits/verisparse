@@ -1,5 +1,5 @@
 
-`include "verisparse.svp"
+`include "verisparse.svh"
 module matching_pursuit_io(input clock,
         input resetN);
 

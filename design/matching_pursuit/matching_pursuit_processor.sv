@@ -1,4 +1,4 @@
-`include "verisparse.svp"
+`include "verisparse.svh"
 
 
 module matching_pursuit_main_loop(input clock,

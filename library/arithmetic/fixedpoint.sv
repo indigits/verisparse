@@ -10,7 +10,7 @@ http://en.wikipedia.org/wiki/Fixed-point_arithmetic
 http://en.wikipedia.org/wiki/Q_(number_format)#Math_operations
 
 */
-`include "verisparse.svp"
+`include "verisparse.svh"
 
 
 module vs_fp_add#(parameter Q=15) (

@@ -1,4 +1,4 @@
-`include "definitions.svp"
+`include "definitions.svh"
 
 module ALU(
     input instruction_t IW,

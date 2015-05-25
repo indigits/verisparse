@@ -1,4 +1,4 @@
-`include "verisparse.svp"
+`include "verisparse.svh"
 `ifndef VS_UTIL
 `define VS_UTIL
 
