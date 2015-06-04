@@ -1,5 +1,16 @@
+/**
 
-module single_clock_synchronous_ram 
+ 
+The synchronous read works as follows:
+- Set the read address before the clock edge
+- At the clock edge the data is transferred from RAM
+  to out_data.
+- After the clock (or at next clock edge), it can be read. 
+
+
+*/
+
+module vs_single_clock_synchronous_ram 
     #(parameter DATA_WIDTH=8,
       parameter ADDR_WIDTH=16)(
       input clock, 

@@ -1,7 +1,14 @@
+/***
+  Read from the RAM happens with one cycle delay.
 
-module single_port_ram 
+  Here is how it proceeds.
+  - address bits are set.
+  - at the next clock edge, they are transferred to addr_reg.
+  - after this they are available for reading.
+ */
+module vs_single_port_ram 
     #(parameter DATA_WIDTH=8,
-      parameter ADDR_WIDTH=32)(
+      parameter ADDR_WIDTH=16)(
       input clock, 
       input write_enable,
       input [(ADDR_WIDTH -1):0] addr,
@@ -21,6 +28,6 @@ module single_port_ram
     // READ returns NEW data.
     // Natural behavior of TriMatrix memory
     // blocks in single port mode
-    assign out_data <= ram[addr_reg];
+    assign out_data = ram[addr_reg];
 endmodule
 
