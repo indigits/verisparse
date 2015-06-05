@@ -58,17 +58,17 @@ endmodule
 module vs_fp_mul#(parameter Q=15) (
     input fp_32_t a,
     input fp_32_t b,
-    output fp_32_t sum);
+    output fp_32_t result);
 
     fp_64_t tmp;
     always_comb begin
         tmp = fp_64_t' (a * b);
         tmp = tmp >> Q;
-        sum = fp_32_t' (tmp);
+        result = fp_32_t' (tmp);
     end
 endmodule
 
-module vs_fp_mac_pe (
+module vs_fp_mac#(parameter Q=15) (
     input clock,
     input logic reset_n,
     input fp_32_t a_in,
@@ -83,7 +83,7 @@ module vs_fp_mac_pe (
     fp_64_t c;
 
     always_ff @(posedge clock)
-        if (reset_n) begin
+        if (~reset_n) begin
             c <= 0;
         end
         else begin
