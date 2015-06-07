@@ -100,10 +100,12 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
             read_addr <= 0;
             done <= 0;
             write_row <= 0;
+            batch_products_transferred <= 0;
         end
         else begin
             reset_macs_n <= 1;
             batch_compute_done <= 0;
+            batch_products_transferred <= 0;
             case (state) 
                 IDLE: begin
                     reset_macs_n <= 0;
@@ -168,6 +170,8 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     if (batch_products_transferred == 1) begin 
                         state <= IDLE;
                         done <= 1;
+                        // down this signal. only meant for one clock.
+                        batch_products_transferred <= 0;
                     end
                 end
                 /*************************************************
@@ -203,23 +207,112 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     // This block is responsible for transferring inner product data
     // into RAM
     always_ff @(posedge clock) begin
-        if (batch_compute_done == 1) begin
-            write_row <= 0;
-            prod_write_enable <= 1;
-            batch_products_transferred <= 0;
-            if (batch == 1) write_addr <= -1;
+        if (COMPUTE_INNER_PRODUCTS == command) begin
+            if (batch_compute_done == 1) begin
+                write_row <= 0;
+                prod_write_enable <= 1;
+                batch_products_transferred <= 0;
+                if (batch == 1) write_addr <= -1;
+            end
+            if (prod_write_enable == 1) begin
+                if (write_row == BATCH_SIZE) begin
+                    prod_write_enable <= 0;
+                end
+                else begin
+                    write_data <= batch_products[write_row];
+                    write_addr <= write_addr + 1;
+                    write_row <= write_row + 1;
+                    if (write_row == (BATCH_SIZE - 1)) begin
+                        batch_products_transferred <= 1;
+                        // $display("batch completed, write_row: %d, write_addr: %d: write_data: %d", 
+                        //     write_row, write_addr, write_data);
+                    end
+                end
+            end
         end
-        if (write_row == BATCH_SIZE) begin
-            prod_write_enable <= 0;
+    end
+
+endmodule
+
+
+module vs_max_identifier #(parameter BATCH_SIZE=64) (
+    input logic clock,    // Clock
+    input logic reset_n,  // Asynchronous reset active low
+    output logic [7:0] read_addr,
+    input logic[FP_DATA_BUS_WIDTH-1:0]  read_data,
+    output byte location,
+    // output from max unit
+    output fp_32_t max_value,
+    input logic start, 
+    output bit batch_done
+);
+
+    typedef enum {
+        IDLE,
+        MEM_DELAY,
+        GET_COUNT,
+        COMPUTE_MAX
+    } states_t;
+
+    states_t state = IDLE;
+    // number of elements processed so far
+    int counter = 0;
+    // input to max unit
+    fp_32_t cur_value;
+    // number of elements processed in the batch
+    fp_32_t batch_counter = 0;
+    // stores the absolute value of current value
+    fp_32_t abs_value;
+    always_comb begin
+        // computation of absolute value
+        abs_value = (cur_value < 0) ? -cur_value : cur_value;
+    end
+
+    always_ff @(posedge clock) begin
+        if (~reset_n) begin
+            read_addr <= 0;
+            location <= 0;
+            state <= IDLE;
+            max_value <= 0;
+            cur_value <= 0;
         end
         else begin
-            prod_write_enable <= 1;
-            write_data <= batch_products[write_row];
-            write_addr <= write_addr + 1;
-            write_row <= write_row + 1;
-            if (write_row == BATCH_SIZE - 1) begin
-                batch_products_transferred <= 1;
-            end
+            case(state) 
+                IDLE: begin
+                    if (start) begin
+                        state <= MEM_DELAY;
+                        if (read_addr == 0) begin
+                        end
+                        else begin
+                        end
+                        batch_counter <= 0;
+                        batch_done <= 0;
+                    end
+                end
+                MEM_DELAY : begin
+                    read_addr<= read_addr + 1;
+                    state <= COMPUTE_MAX;
+                end
+                COMPUTE_MAX : begin
+                    //$display("addr: %d, max: %d", read_addr, fp_32_t'(read_data));
+                    cur_value <= fp_32_t'(read_data);
+                    if (abs_value > max_value) begin
+                        location <= counter - 1;
+                        max_value <= abs_value;
+                    end
+                    counter <= counter + 1;
+                    if (batch_counter == BATCH_SIZE-1) begin
+                        // This batch has been processed
+                        state <= IDLE;
+                        batch_done <= 1;
+                    end
+                    else begin
+                        // next address
+                        read_addr <= read_addr + 1;
+                        batch_counter <= batch_counter + 1;
+                    end
+                end
+            endcase
         end
     end
 

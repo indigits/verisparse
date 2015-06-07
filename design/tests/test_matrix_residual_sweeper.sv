@@ -12,6 +12,7 @@ module test_matrix_residual_sweeper;
 
     parameter ROWS = 4;
     parameter COLUMNS = 8;
+    parameter BATCH_SIZE = 4;
     const int CELLS = ROWS * COLUMNS;
 
     logic prod_write_enable;
@@ -66,11 +67,26 @@ module test_matrix_residual_sweeper;
             proc_read_data
         );
 
-    vs_sensing_matrix_processor #(ROWS, COLUMNS, 0, 2) uut(
+    vs_sensing_matrix_processor #(ROWS, COLUMNS, 0, BATCH_SIZE) uut(
         clock, reset_n, 
         res_read_addr, proc_read_data,
         prod_write_enable, prod_write_addr, prod_in_data,
-        command, start, done, batch_products_transferred);
+        command, start, done, 
+        batch_products_transferred);
+
+    byte max_location;
+    fp_32_t max_value;
+    logic max_unit_batch_done;
+
+    vs_max_identifier #(BATCH_SIZE) max_unit(
+        clock, reset_n, 
+        prod_read_addr, prod_out_data,
+        max_location, 
+        max_value,
+        batch_products_transferred,
+        max_unit_batch_done
+        );
+
 
     task automatic fill_matrix_and_residual();
         verisparse::int_arr_t phi_cw = {
@@ -83,7 +99,9 @@ module test_matrix_residual_sweeper;
         1, -1, 1, 1,
         -1, 1, 1, 1
         };
-        verisparse::int_arr_t residual = {1, 2, 2, 1};
+        verisparse::int_arr_t residual = {
+        1, 2, -2, 1
+        };
         int index = 0;
         for (int c=0; c<COLUMNS; ++c)
             for (int r=0; r< ROWS; ++r)  begin
@@ -150,7 +168,10 @@ module test_matrix_residual_sweeper;
         wait(done);
         // now verify everything.
         $display("Sweep completed");
-
+        wait(max_unit_batch_done);
+        $display("Max computation completed");
+        $display("Max location: %d, value: %d",
+            max_location, max_value);
     endtask : verify_sweep
 
     task automatic print_phi();
