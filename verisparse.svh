@@ -49,6 +49,8 @@ package verisparse;
     parameter REPRESENTATION_ADDR_WIDTH = 12;
     parameter DICTIONARY_ADDR_WIDTH = 20;
     parameter DATA_BUS_WIDTH = 8;
+    // Fixed point data point bus width
+    parameter FP_DATA_BUS_WIDTH = 32;
 
 
     /**
@@ -90,6 +92,13 @@ package verisparse;
         pursuit_y_bus_t y;
         pursuit_dict_bus_t dict;
     } pursuit_bus_t;
+
+
+    typedef enum {
+        LOAD_SENSING_MATRIX,
+        COMPUTE_INNER_PRODUCTS,
+        COMPUTE_APPROXIMATION
+    }vs_sensing_matrix_command_t;
 
 endpackage
 import verisparse::*;
