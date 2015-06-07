@@ -31,7 +31,6 @@ module test_fixed_point;
         .clock(clock),
         .reset_n(reset_n),
         .a_in(a), .b_in(b), 
-        .a_out(a_out), .b_out(b_out),
         .result(mac_result)
         );
 

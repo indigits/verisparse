@@ -73,12 +73,7 @@ module vs_fp_mac#(parameter Q=15) (
     input logic reset_n,
     input fp_32_t a_in,
     input fp_32_t b_in,
-    output fp_32_t a_out,
-    output fp_32_t b_out,
     output fp_32_t result);
-
-    assign a_out = a_in;
-    assign b_out = b_in;
 
     fp_64_t c;
 
