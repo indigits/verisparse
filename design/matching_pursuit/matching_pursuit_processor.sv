@@ -178,19 +178,19 @@ module matching_pursuit_chip(input clock,
     pursuit_bus_t bus;
 
     matching_pursuit_processor processor(clock, resetN, start, done);
-    single_clock_synchronous_ram dict_ram(.clock(clock),
+    vs_single_clock_synchronous_ram dict_ram(.clock(clock),
         .write_enable(bus.dict.write_enable),
         .read_addr(bus.dict.read_addr),
         .write_addr(bus.dict.write_addr),
         .in_data(bus.dict.read_data),
         .out_data(bus.dict.write_data));
-    single_clock_synchronous_ram y_ram(.clock(clock),
+    vs_single_clock_synchronous_ram y_ram(.clock(clock),
         .write_enable(bus.y.write_enable),
         .read_addr(bus.y.read_addr),
         .write_addr(bus.y.write_addr),
         .in_data(bus.y.read_data),
         .out_data(bus.y.write_data));
-    single_clock_synchronous_ram x_ram(.clock(clock),
+    vs_single_clock_synchronous_ram x_ram(.clock(clock),
         .write_enable(bus.x.write_enable),
         .read_addr(bus.x.read_addr),
         .write_addr(bus.x.write_addr),
