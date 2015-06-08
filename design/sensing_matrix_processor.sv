@@ -263,6 +263,8 @@ module vs_max_identifier #(parameter BATCH_SIZE=64) (
     fp_32_t batch_counter = 0;
     // stores the absolute value of current value
     fp_32_t abs_value;
+    // stores the absolute max value
+    fp_32_t abs_max_value;
     always_comb begin
         // computation of absolute value
         abs_value = (cur_value < 0) ? -cur_value : cur_value;
@@ -296,9 +298,10 @@ module vs_max_identifier #(parameter BATCH_SIZE=64) (
                 COMPUTE_MAX : begin
                     //$display("addr: %d, max: %d", read_addr, fp_32_t'(read_data));
                     cur_value <= fp_32_t'(read_data);
-                    if (abs_value > max_value) begin
+                    if (abs_value > abs_max_value) begin
                         location <= counter - 1;
-                        max_value <= abs_value;
+                        abs_max_value <= abs_value;
+                        max_value <= cur_value;
                     end
                     counter <= counter + 1;
                     if (batch_counter == BATCH_SIZE-1) begin

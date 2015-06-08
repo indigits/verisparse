@@ -100,7 +100,7 @@ module test_matrix_residual_sweeper;
         -1, 1, 1, 1
         };
         verisparse::int_arr_t residual = {
-        1, 2, -2, 1
+        -1, -2, -2, 1
         };
         int index = 0;
         for (int c=0; c<COLUMNS; ++c)
