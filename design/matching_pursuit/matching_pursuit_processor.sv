@@ -1,43 +1,125 @@
 `include "verisparse.svh"
 
 
-module matching_pursuit_main_loop(input clock,
-    input resetN,
-    input start,
-    output logic done);
 
-    typedef enum{IDLE, SWEEP, UPDATE_SUPPORT, 
-    UPDATE_SOLUTION, UPDATE_RESIDUAL} states_t;
+interface vs_dict_proc_if();
+    // ports related to dictionary processor
+    bit batch_products_transferred;
+    vs_sensing_matrix_command_t command;
+    bit start = 0;
+    wire done;
+
+    modport processor(output batch_products_transferred,
+        input command,
+        input start,
+        output done);
+
+    modport driver(input batch_products_transferred,
+        output command,
+        output start,
+        input done);
+endinterface
+
+interface vs_abs_max_identifier_if(input clock);
+    // ports related to max identifier unit
+    byte location;
+    fp_32_t value;
+    logic batch_done;
+
+    modport processor(
+        input clock,
+        output location,
+        output value,
+        output batch_done
+    );
+
+    modport driver(
+        input location,
+        input value,
+        input batch_done
+    );
+endinterface
+
+
+interface vs_clk_rst_bus_if(
+    input logic clock, 
+    input logic reset_n);
+
+
+
+    // ports for state machine of the algorithm
+    modport alg_fsm(
+        input clock,
+        input reset_n
+    ); 
+
+endinterface
+
+interface vs_start_done_bus_if ();
+    logic start;
+    logic done;
+    modport processor(
+        input start,
+        output done);
+    modport driver(
+        output start,
+        input done);
+endinterface
+
+module vs_matching_pursuit_main_loop(
+    input clock,
+    input reset_n,
+    interface bus,
+    interface residual_bus,
+    interface product_bus,
+    interface dict_proc_bus,
+    interface max_ident_bus
+    );
+
+    typedef enum{IDLE, 
+        SWEEP_PRE,
+        SWEEP,
+        IDENTIFY_MAX, 
+        UPDATE_SUPPORT, 
+        UPDATE_SOLUTION, 
+        UPDATE_RESIDUAL
+    } states_t;
     const int cycles = 2;
     int unsigned dummy_counter;
     states_t state = IDLE;
 
     always_ff @(posedge clock) begin
-        if (!resetN) begin
-            done <= 0;
+        if (!reset_n) begin
+            bus.done <= 0;
             dummy_counter <= cycles;
             state <= IDLE;
         end
         else begin
             case (state)
                 IDLE: begin
-                    if (start) begin
-                        state <= SWEEP;
-                        dummy_counter <= cycles;
+                    if (bus.start) begin
+                        dict_proc_bus.command <= COMPUTE_INNER_PRODUCTS;
+                        dict_proc_bus.start <= 1;
+                        state <= SWEEP_PRE;
                     end
-                    done <= 0;
+                    bus.done <= 0;
+                end
+                SWEEP_PRE: begin
+                    // lower the start pin
+                    dict_proc_bus.start <= 0;
+                    state <= SWEEP;
                 end
                 SWEEP : begin
-                    if (dummy_counter == 0) begin
+                    // wait for inner products to be computed
+                    if (dict_proc_bus.done) begin
                         // The loop has been processed
+                        state <= IDENTIFY_MAX;
+                    end
+                end
+                IDENTIFY_MAX : begin
+                    if (max_ident_bus.batch_done) begin
                         state <= UPDATE_SUPPORT;
                         dummy_counter <= cycles;
-                    end
-                    else begin
-                        // do some work
-                        dummy_counter <= dummy_counter -1;
-                        // remain in the state
-                        state <= SWEEP;
                     end
                 end
                 UPDATE_SUPPORT : begin
@@ -70,7 +152,7 @@ module matching_pursuit_main_loop(input clock,
                     if (dummy_counter == 0) begin
                         // The loop has been processed
                         state <= IDLE;
-                        done <= 1;
+                        bus.done <= 1;
                     end
                     else begin
                         // do some work
@@ -89,65 +171,94 @@ module matching_pursuit_main_loop(input clock,
 endmodule
 
 
-module matching_pursuit_processor (input clock,
-        input resetN,
-        input start,
-        output logic done);
+module vs_matching_pursuit_fsm (
+    input clock,
+    input reset_n,
+    interface bus,
+    interface loop_bus,
+    interface y_bus,
+    interface residual_bus
+    );
     parameter M = SIGNAL_SIZE_DEFAULT;
     parameter N = DICTIONARY_SIZE_DEFAULT;
     parameter K = SPARSITY_LEVEL_DEFAULT;
 
-    typedef enum {IDLE, 
+    typedef enum {
+    // processor is doing nothing
+    IDLE, 
+    // the processor is transferring data from y ram to r ram.
+    TRANSFERRING_Y_TO_R_PRE, 
+    TRANSFERRING_Y_TO_R, 
+    TRANSFERRING_Y_TO_R_POST, 
     READY,  // the processor is ready to start iteration
     WORKING // the processor is executing next iteration
     } states_t;
 
     int unsigned k_counter;
-    logic loop_start;
-    logic loop_done;
     states_t state = IDLE;
 
-    // y = Phi * x
-    fp_32_t x[N];
-    fp_32_t y[M];
-    fp_32_t Phi[M][N];
-
-    matching_pursuit_main_loop main_loop(clock, resetN, loop_start, loop_done);
+    int transferred_entries = 0;
+    bit y_to_r_transferred = 0;
 
     always_ff @(posedge clock) begin
-        if (!resetN) begin
-            done <= 0;
+        if (!reset_n) begin
+            bus.done <= 0;
             k_counter <= K;
-            loop_start <= 0;
+            loop_bus.start <= 0;
             state <= IDLE;
+            y_to_r_transferred <= 0;
         end
         else begin
             case (state)
                 IDLE: begin
-                    if (start) begin
-                        state <= READY;
+                    if (bus.start) begin
+                        state <= TRANSFERRING_Y_TO_R_PRE;
                         k_counter <= K;
+                        transferred_entries <= 0;
+                        y_bus.read_addr <= 0;
+                        residual_bus.write_enable <= 1;
                     end
-                    done <= 0;
+                    bus.done <= 0;
+                end
+                TRANSFERRING_Y_TO_R_PRE: begin
+                    state <= TRANSFERRING_Y_TO_R;
+                    y_bus.read_addr <= y_bus.read_addr + 1;
+                    residual_bus.write_addr <= -1;
+                end
+                TRANSFERRING_Y_TO_R : begin
+                    if (transferred_entries != M) begin
+                        // $display("y: %d, %d, r: %d, %d",
+                        //     y_bus.read_addr, y_bus.read_data,
+                        //     residual_bus.write_addr, residual_bus.write_data);
+                        residual_bus.write_data <= y_bus.read_data;
+                        y_bus.read_addr <= y_bus.read_addr + 1;
+                        residual_bus.write_addr <= residual_bus.write_addr + 1;
+                        transferred_entries <= transferred_entries + 1;
+                    end
+                    else begin
+                        y_to_r_transferred <= 1;
+                        state <= READY;
+                        residual_bus.write_enable <= 0;
+                    end                    
                 end
                 READY : begin
                     if (k_counter == 0) begin
                         // The loop has been processed
                         state <= IDLE;
-                        loop_start <= 0;
-                        done <= 1;
+                        loop_bus.start <= 0;
+                        bus.done <= 1;
                     end
                     else begin
                         // indicate the main loop module to start working
-                        loop_start <= 1;
+                        loop_bus.start <= 1;
                         // move to working state
                         state <= WORKING;
                     end
                 end
                 WORKING : begin
                     // unset the loop start flag
-                    if (loop_start ) loop_start <= 0;
-                    if (loop_done == 0) begin
+                    if (loop_bus.start ) loop_bus.start <= 0;
+                    if (loop_bus.done == 0) begin
                         // we continue to wait
                         state <= WORKING;
                     end
@@ -170,36 +281,120 @@ endmodule
 
 
 module matching_pursuit_chip(input clock,
-        input resetN);
+        input reset_n);
 
     bit start = 0;
-    wire done;
+    bit done;
 
-    pursuit_bus_t bus;
+    vs_sync_ram_bus_if#(REPRESENTATION_ADDR_WIDTH) x_bus(clock);
+    vs_sync_ram_bus_if#(SIGNAL_ADDR_WIDTH) y_bus(clock);
+    vs_sync_ram_bus_if#(DICTIONARY_ADDR_WIDTH) dict_bus(clock);
+    vs_sync_ram_bus_if#(8) product_bus(clock);
+    vs_sync_ram_bus_if#(8) residual_bus(clock);
 
-    matching_pursuit_processor processor(clock, resetN, start, done);
-    vs_single_clock_synchronous_ram dict_ram(.clock(clock),
-        .write_enable(bus.dict.write_enable),
-        .read_addr(bus.dict.read_addr),
-        .write_addr(bus.dict.write_addr),
-        .in_data(bus.dict.read_data),
-        .out_data(bus.dict.write_data));
-    vs_single_clock_synchronous_ram y_ram(.clock(clock),
-        .write_enable(bus.y.write_enable),
-        .read_addr(bus.y.read_addr),
-        .write_addr(bus.y.write_addr),
-        .in_data(bus.y.read_data),
-        .out_data(bus.y.write_data));
-    vs_single_clock_synchronous_ram x_ram(.clock(clock),
-        .write_enable(bus.x.write_enable),
-        .read_addr(bus.x.read_addr),
-        .write_addr(bus.x.write_addr),
-        .in_data(bus.x.read_data),
-        .out_data(bus.x.write_data));
+
+    parameter BATCH_SIZE = SIGNAL_SIZE_DEFAULT;
+
+    vs_single_clock_synchronous_ram #(FP_DATA_BUS_WIDTH, 8) products(
+        .clock(clock),
+        .write_enable(product_bus.write_enable),
+        .read_addr(product_bus.read_addr),
+        .write_addr(product_bus.write_addr),
+        .in_data(product_bus.write_data),
+        .out_data(product_bus.read_data));
+
+
+    vs_single_clock_synchronous_ram #(FP_DATA_BUS_WIDTH, 8) residuals(
+        .clock(clock),
+        .write_enable(residual_bus.write_enable),
+        .read_addr(residual_bus.read_addr),
+        .write_addr(residual_bus.write_addr),
+        .in_data(residual_bus.write_data),
+        .out_data(residual_bus.read_data));
+
+
+    vs_single_clock_synchronous_ram #(FP_DATA_BUS_WIDTH) dict_ram(.clock(clock),
+        .write_enable(dict_bus.write_enable),
+        .read_addr(dict_bus.read_addr),
+        .write_addr(dict_bus.write_addr),
+        .in_data(dict_bus.read_data),
+        .out_data(dict_bus.write_data));
     defparam dict_ram.ADDR_WIDTH = DICTIONARY_ADDR_WIDTH;
+
+
+    vs_single_clock_synchronous_ram #(FP_DATA_BUS_WIDTH) y_ram(.clock(clock),
+        .write_enable(y_bus.write_enable),
+        .read_addr(y_bus.read_addr),
+        .write_addr(y_bus.write_addr),
+        .in_data(y_bus.write_data),
+        .out_data(y_bus.read_data));
     defparam y_ram.ADDR_WIDTH = SIGNAL_ADDR_WIDTH;
+
+
+    vs_single_clock_synchronous_ram #(FP_DATA_BUS_WIDTH) x_ram(.clock(clock),
+        .write_enable(x_bus.write_enable),
+        .read_addr(x_bus.read_addr),
+        .write_addr(x_bus.write_addr),
+        .in_data(x_bus.read_data),
+        .out_data(x_bus.write_data));
     defparam x_ram.ADDR_WIDTH = REPRESENTATION_ADDR_WIDTH;
 
+
+    logic[FP_DATA_BUS_WIDTH-1:0]  proc_read_data;
+    logic proc_read_select = 0;
+    vs_mux_2x1 #(FP_DATA_BUS_WIDTH) processor_read_data_mux(proc_read_select,
+            residual_bus.read_data, dict_bus.write_data,
+            proc_read_data
+        );
+
+
+    vs_dict_proc_if dict_proc_bus();
+
+    vs_sensing_matrix_processor #(SIGNAL_SIZE_DEFAULT, DICTIONARY_SIZE_DEFAULT, 
+        FP_Q_DEFAULT, BATCH_SIZE) dict_processor(
+        clock, reset_n, 
+        residual_bus.read_addr, proc_read_data,
+        product_bus.write_enable, product_bus.write_addr, product_bus.write_data,
+        dict_proc_bus.command, 
+        dict_proc_bus.start, dict_proc_bus.done, 
+        dict_proc_bus.batch_products_transferred);
+
+
+    vs_abs_max_identifier_if max_ident_bus(clock);
+
+    vs_max_identifier #(BATCH_SIZE) max_unit(
+        clock, reset_n, 
+        product_bus.read_addr, product_bus.read_data,
+        max_ident_bus.location, 
+        max_ident_bus.value,
+        dict_proc_bus.batch_products_transferred,
+        max_ident_bus.batch_done
+        );
+
+
+    vs_start_done_bus_if main_loop_bus();
+
+    vs_matching_pursuit_main_loop main_loop(
+        clock, reset_n,
+        main_loop_bus.processor, 
+        residual_bus, product_bus, dict_proc_bus,
+        max_ident_bus.driver);
+
+
+    vs_start_done_bus_if alg_fsm_bus();
+
+    vs_matching_pursuit_fsm alg_fsm(
+        clock, reset_n,
+        alg_fsm_bus.processor, 
+        main_loop_bus.driver, 
+        y_bus.read_write_ports, 
+        residual_bus.read_write_ports 
+        );
+
+    always_comb begin
+        done = alg_fsm_bus.done;
+        alg_fsm_bus.start = start;
+    end
 endmodule
 
 
