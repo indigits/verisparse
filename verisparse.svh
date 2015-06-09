@@ -15,6 +15,9 @@ package verisparse;
     // We are using (15, 32) fixed point number system
     parameter FP_Q_DEFAULT = 15;
     parameter FP_N_DEFAULT = 32;
+    parameter FLOAT_TO_FIXED_FACTOR_DEFAULT = (1 << FP_Q_DEFAULT);
+    parameter FIXED_TO_FLOAT_FACTOR_DEFAULT = 1.0 / real'(FLOAT_TO_FIXED_FACTOR_DEFAULT);
+    parameter FRACTION_MASK_DEFAULT = (FLOAT_TO_FIXED_FACTOR_DEFAULT - 1);
     // 32 bit fixed point number
     typedef int signed fp_32_t;
     // 64 bit fixed point number
@@ -41,14 +44,13 @@ package verisparse;
     typedef uint64_t uint64_arr_t[];
 
     // Defaults for dimensions of various spaces
-    parameter SIGNAL_SIZE_DEFAULT = 64;
-    parameter DICTIONARY_SIZE_DEFAULT = 256;
+    parameter SIGNAL_SIZE_DEFAULT = 16;
+    parameter DICTIONARY_SIZE_DEFAULT = 64;
     parameter SPARSITY_LEVEL_DEFAULT = 4;
 
-    parameter SIGNAL_ADDR_WIDTH = 10;
-    parameter REPRESENTATION_ADDR_WIDTH = 12;
-    parameter DICTIONARY_ADDR_WIDTH = 20;
-    parameter DATA_BUS_WIDTH = 8;
+    parameter SIGNAL_ADDR_WIDTH = 8;
+    parameter REPRESENTATION_ADDR_WIDTH = 8;
+    parameter DICTIONARY_ADDR_WIDTH = 16;
     // Fixed point data point bus width
     parameter FP_DATA_BUS_WIDTH = 32;
 
@@ -67,24 +69,24 @@ package verisparse;
         logic write_enable;
         logic [REPRESENTATION_ADDR_WIDTH -1:0] read_addr;
         logic [REPRESENTATION_ADDR_WIDTH -1:0] write_addr;
-        logic[DATA_BUS_WIDTH-1:0]  read_data;
-        logic[DATA_BUS_WIDTH-1:0]  write_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  read_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  write_data;
     } pursuit_x_bus_t;
 
     typedef struct {
         logic write_enable;
         logic [SIGNAL_ADDR_WIDTH -1:0] read_addr;
         logic [SIGNAL_ADDR_WIDTH -1:0] write_addr;
-        logic[DATA_BUS_WIDTH-1:0]  read_data;
-        logic[DATA_BUS_WIDTH-1:0]  write_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  read_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  write_data;
     } pursuit_y_bus_t;
 
     typedef struct {
         logic write_enable;
         logic [DICTIONARY_ADDR_WIDTH -1:0] read_addr;
         logic [DICTIONARY_ADDR_WIDTH -1:0] write_addr;
-        logic[DATA_BUS_WIDTH-1:0]  read_data;
-        logic[DATA_BUS_WIDTH-1:0]  write_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  read_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  write_data;
     } pursuit_dict_bus_t;
 
     typedef struct {
@@ -99,6 +101,33 @@ package verisparse;
         COMPUTE_INNER_PRODUCTS,
         COMPUTE_APPROXIMATION
     }vs_sensing_matrix_command_t;
+
+
+    typedef struct {
+        logic write_enable;
+        logic [7:0] read_addr;
+        logic [7:0] write_addr;
+        logic[FP_DATA_BUS_WIDTH-1:0]  in_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  out_data;
+    } vs_8bit_sync_ram_ports_t;
+
+    typedef struct {
+        logic write_enable;
+        logic [15:0] read_addr;
+        logic [15:0] write_addr;
+        logic[FP_DATA_BUS_WIDTH-1:0]  in_data;
+        logic[FP_DATA_BUS_WIDTH-1:0]  out_data;
+    } vs_16bit_sync_ram_ports_t;
+
+
+    function automatic int vs_real_to_fixed(real value);
+        return  int'(value * FLOAT_TO_FIXED_FACTOR_DEFAULT);  
+    endfunction
+
+    function automatic real vs_fixed_to_real(int value);
+        return  real'(value) * FIXED_TO_FLOAT_FACTOR_DEFAULT;  
+    endfunction
+
 
 endpackage
 import verisparse::*;
