@@ -7,9 +7,9 @@ filepath = which(mfilename);
 parent_dir = fileparts(filepath);
 
 % Signal space 
-N = 256;
+N = 64;
 % Number of measurements
-M = 64;
+M = 16;
 % Sparsity level
 K = 4;
 
