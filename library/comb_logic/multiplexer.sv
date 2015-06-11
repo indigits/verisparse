@@ -17,6 +17,23 @@ always_comb begin
 end
 endmodule
 
+module vs_mux_3x1#(parameter WIDTH=1) (
+    input logic [1:0]select,
+    input logic [WIDTH-1:0] d_in_0,
+    input logic [WIDTH-1:0] d_in_1,
+    input logic [WIDTH-1:0] d_in_2,
+    output logic [WIDTH-1:0] d_out
+    );
+always_comb begin
+    case(select) 
+        'b00: d_out = d_in_0;
+        'b01: d_out = d_in_1;
+        'b10: d_out = d_in_2;
+        'b11: d_out = 'x;
+    endcase
+end
+endmodule
+
 module vs_mux_4x1#(parameter WIDTH=1) (
     input logic [1:0]select,
     input logic [WIDTH-1:0] d_in_0,
