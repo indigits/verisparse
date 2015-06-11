@@ -50,3 +50,51 @@ module test_multiplexer;
     end
 
 endmodule
+
+
+module test_demultiplexer;
+   logic select_1bit;
+    logic [1:0] select_2bit;
+
+    logic [3:0] in_data;
+    logic [3:0] out_data[6];
+
+    vs_demux_1x2 #(4) dut_demux_1x2(select_1bit, 
+        in_data, out_data[0], out_data[1]);
+
+    vs_demux_1x4 #(4) dut_demux_1x4(select_2bit, 
+        in_data, out_data[2], 
+        out_data[3], out_data[4], 
+        out_data[5]);
+
+    initial begin
+        `TEST_SET_START
+        in_data = 3;
+        for (int i=0; i< 2; ++i) begin
+            select_1bit = i;
+            #1;
+            for (int j=0; j < 2; ++j) begin
+                if (i == j) begin
+                    `TEST_SET_EQUAL(out_data[j], in_data);
+                end
+                else begin
+                    `TEST_SET_EQUAL(out_data[j], 0);
+                end
+            end
+        end
+        for (int i=0; i< 4; ++i) begin
+            select_2bit = i;
+            #1;
+            for (int j=0; j < 4; ++j) begin
+                if (i == j) begin
+                    `TEST_SET_EQUAL(out_data[j+2], in_data);
+                end
+                else begin
+                    `TEST_SET_EQUAL(out_data[j+2], 0);
+                end
+            end
+        end
+
+        `TEST_SET_SUMMARIZE("Demultiplexer")
+    end
+endmodule   
