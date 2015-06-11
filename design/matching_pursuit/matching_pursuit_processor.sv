@@ -1,24 +1,26 @@
 `include "verisparse.svh"
 
 
+/***
+The source for input A for 
+dictionary processor
+*/
+typedef enum {
+  DICT_PROC_INPUT_A_X,
+  DICT_PROC_INPUT_A_RESIDUAL,
+  DICT_PROC_INPUT_A_DICTIONARY  
+}dict_proc_read_a_source_t;
 
-interface vs_dict_proc_if();
-    // ports related to dictionary processor
-    bit batch_products_transferred;
-    vs_sensing_matrix_command_t command;
-    bit start = 0;
-    wire done;
+/**
+Destination for output A for
+dictionary processor
+*/
+typedef enum {
+  DICT_PROC_OUTPUT_A_PROD,
+  DICT_PROC_OUTPUT_A_RES
+}dict_proc_write_a_dest_t;
 
-    modport processor(output batch_products_transferred,
-        input command,
-        input start,
-        output done);
 
-    modport driver(input batch_products_transferred,
-        output command,
-        output start,
-        input done);
-endinterface
 
 interface vs_abs_max_identifier_if(input clock);
     // ports related to max identifier unit
@@ -70,6 +72,7 @@ module vs_matching_pursuit_main_loop(
     input clock,
     input reset_n,
     interface bus,
+    interface x_bus,
     interface residual_bus,
     interface product_bus,
     interface dict_proc_bus,
@@ -84,9 +87,20 @@ module vs_matching_pursuit_main_loop(
         UPDATE_SOLUTION, 
         UPDATE_RESIDUAL
     } states_t;
+    typedef enum{
+        US_SET_X_READ_ADDR,
+        US_READ_X_VALUE,
+        US_SET_X_WRITE_ADDR,        
+        US_WRITE_X_VALUE,
+        US_MOVE_TO_NEXT_STEP
+
+    }update_support_states_t;
+
     const int cycles = 2;
     int unsigned dummy_counter;
     states_t state = IDLE;
+    update_support_states_t update_support_state;
+    fp_32_t current_x_value;
 
     always_ff @(posedge clock) begin
         if (!reset_n) begin
@@ -119,27 +133,41 @@ module vs_matching_pursuit_main_loop(
                 IDENTIFY_MAX : begin
                     if (max_ident_bus.batch_done) begin
                         state <= UPDATE_SUPPORT;
-                        dummy_counter <= cycles;
+                        update_support_state <= US_SET_X_READ_ADDR;
                     end
                 end
                 UPDATE_SUPPORT : begin
-                    if (dummy_counter == 0) begin
-                        // The loop has been processed
-                        state <= UPDATE_SOLUTION;
-                        dummy_counter <= cycles;
-                    end
-                    else begin
-                        // do some work
-                        dummy_counter <= dummy_counter -1;
-                        // remain in the state
-                        state <= UPDATE_SUPPORT;
-                    end
+                    case(update_support_state)
+                        US_SET_X_READ_ADDR: begin
+                            x_bus.read_addr <= max_ident_bus.location;
+                            update_support_state <= US_READ_X_VALUE;
+                            // $display("current x value: %f",
+                            //     vs_fixed_to_real(int'(PE.x_ram.ram[max_ident_bus.location])));
+                        end
+                        US_READ_X_VALUE : begin
+                            current_x_value <= x_bus.read_data;
+                            x_bus.write_addr <= max_ident_bus.location;
+                            update_support_state <= US_WRITE_X_VALUE;
+                        end
+                        US_WRITE_X_VALUE : begin
+                            x_bus.write_enable <= 1;
+                            x_bus.write_data <= current_x_value + max_ident_bus.value;
+                            update_support_state <= US_MOVE_TO_NEXT_STEP;
+                        end
+                        US_MOVE_TO_NEXT_STEP : begin
+                            x_bus.write_enable <= 0;
+                            state <= UPDATE_SOLUTION;
+                            dummy_counter <= cycles;
+                        end
+                    endcase
                 end
                 UPDATE_SOLUTION : begin
                     if (dummy_counter == 0) begin
                         // The loop has been processed
                         state <= UPDATE_RESIDUAL;
                         dummy_counter <= cycles;
+                        // $display("updated x value: %f",
+                        //     vs_fixed_to_real(int'(PE.x_ram.ram[max_ident_bus.location])));
                     end
                     else begin
                         // do some work
@@ -335,29 +363,35 @@ module matching_pursuit_chip(input clock,
         .write_enable(x_bus.write_enable),
         .read_addr(x_bus.read_addr),
         .write_addr(x_bus.write_addr),
-        .in_data(x_bus.read_data),
-        .out_data(x_bus.write_data));
+        .in_data(x_bus.write_data),
+        .out_data(x_bus.read_data));
     defparam x_ram.ADDR_WIDTH = REPRESENTATION_ADDR_WIDTH;
 
 
     logic[FP_DATA_BUS_WIDTH-1:0]  proc_read_data;
-    logic proc_read_select = 0;
-    vs_mux_2x1 #(FP_DATA_BUS_WIDTH) processor_read_data_mux(proc_read_select,
-            residual_bus.read_data, dict_bus.write_data,
+    logic [1:0]proc_read_select = 0;
+
+    vs_mux_3x1 #(FP_DATA_BUS_WIDTH) processor_read_data_mux(proc_read_select,
+            residual_bus.read_data, 
+            dict_bus.write_data,
+            x_bus.read_data,
             proc_read_data
         );
 
 
-    vs_dict_proc_if dict_proc_bus();
+    vs_dict_proc_if dict_proc_bus(clock, reset_n);
 
     vs_sensing_matrix_processor #(SIGNAL_SIZE_DEFAULT, DICTIONARY_SIZE_DEFAULT, 
         FP_Q_DEFAULT, BATCH_SIZE) dict_processor(
-        clock, reset_n, 
-        residual_bus.read_addr, proc_read_data,
-        product_bus.write_enable, product_bus.write_addr, product_bus.write_data,
-        dict_proc_bus.command, 
-        dict_proc_bus.start, dict_proc_bus.done, 
-        dict_proc_bus.batch_products_transferred);
+        dict_proc_bus);
+
+    always_comb begin
+        residual_bus.read_addr = dict_proc_bus.read_addr;
+        dict_proc_bus.read_data = proc_read_data;
+        product_bus.write_enable = dict_proc_bus.write_enable;
+        product_bus.write_addr = dict_proc_bus.write_addr;
+        product_bus.write_data = dict_proc_bus.write_data;
+    end
 
 
     vs_abs_max_identifier_if max_ident_bus(clock);
@@ -377,6 +411,7 @@ module matching_pursuit_chip(input clock,
     vs_matching_pursuit_main_loop main_loop(
         clock, reset_n,
         main_loop_bus.processor, 
+        x_bus,
         residual_bus, product_bus, dict_proc_bus,
         max_ident_bus.driver);
 

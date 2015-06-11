@@ -7,6 +7,7 @@ module matching_pursuit_io(input clock,
         reset_chip();
         load_sensing_matrix_and_signal();
         print_y_ram();
+        print_x_ram();
         print_dict_ram(10, 10);
         load_dictionary_in_processor_direct();
         print_phi_in_matrix_processor(10, 10);
@@ -70,11 +71,23 @@ module matching_pursuit_io(input clock,
     endfunction
 
     function automatic void print_y_ram();
+        $display("Printing Y RAM contents:");
         for (int i = 0; i < SIGNAL_SIZE_DEFAULT; ++i) begin
             if ((i & 'hf) == 0) begin
                 $write("\n");
             end
             $write("%f ", vs_fixed_to_real(int'(PE.y_ram.ram[i]) ));
+        end
+        $write("\n");
+    endfunction
+
+    function automatic void print_x_ram();
+        $display("Printing X RAM contents:");
+        for (int i = 0; i < DICTIONARY_SIZE_DEFAULT; ++i) begin
+            if ((i & 'hf) == 0) begin
+                $write("\n");
+            end
+            $write("%f ", vs_fixed_to_real(int'(PE.x_ram.ram[i]) ));
         end
         $write("\n");
     endfunction

@@ -1,5 +1,72 @@
 `include "verisparse.svh"
 
+
+
+interface vs_dict_proc_if(
+    input logic clock,// Clock
+    input logic reset_n// Asynchronous reset active low
+    );
+
+    /*
+    This port is used to specify the address for reading
+    data from the input memory.
+
+    For computing inner products, this is read address
+    for memory holding residual.
+    */
+    logic [7:0] read_addr;
+    /*
+    This port is used to load data from input memory.
+
+    For computing inner products, this is input data
+    port for reading residual values.
+
+    For loading the sensing matrix, this port
+    acts as the input port for sensing matrix 
+    cells. Sensing matrix is read in column wise.
+    Address generation is not the responsibility
+    of this unit.
+    */
+    logic[FP_DATA_BUS_WIDTH-1:0]  read_data;
+
+    logic write_enable;
+    logic [7:0] write_addr;
+    logic[FP_DATA_BUS_WIDTH-1:0]  write_data;
+
+    vs_sensing_matrix_command_t command;
+    logic start; 
+    logic done;
+    logic batch_products_transferred;
+
+
+
+    modport processor(
+        input clock, input reset_n,
+        input start, output done,
+
+
+        output read_addr, input read_data,
+
+        output write_enable, write_addr, write_data,
+
+        input command,
+        output batch_products_transferred
+        );
+
+    modport driver(
+        output start, input done,
+
+        input read_addr, output read_data,
+
+        input write_enable, write_addr, write_data,
+
+        output command,
+        input batch_products_transferred
+        );
+
+endinterface
+
+
 /**
 This module provides various functions
 related to the sensing matrix.
@@ -13,36 +80,7 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     parameter COLUMNS=256,
     parameter Q=15,
     parameter BATCH_SIZE=ROWS) (
-    input logic clock,    // Clock
-    input logic reset_n,  // Asynchronous reset active low
-    /*
-    This port is used to specify the address for reading
-    data from the input memory.
-
-    For computing inner products, this is read address
-    for memory holding residual.
-    */
-    output logic [7:0] read_addr,
-    /*
-    This port is used to load data from input memory.
-
-    For computing inner products, this is input data
-    port for reading residual values.
-
-    For loading the sensing matrix, this port
-    acts as the input port for sensing matrix 
-    cells. Sensing matrix is read in column wise.
-    Address generation is not the responsibility
-    of this unit.
-    */
-    input logic[FP_DATA_BUS_WIDTH-1:0]  read_data,
-    output logic prod_write_enable,
-    output logic [7:0] write_addr,
-    output logic[FP_DATA_BUS_WIDTH-1:0]  write_data,
-    input vs_sensing_matrix_command_t command,
-    input logic start, 
-    output logic done,
-    output bit batch_products_transferred
+    vs_dict_proc_if.processor bus
 );
 
     parameter BATCHES = COLUMNS / BATCH_SIZE;
@@ -88,30 +126,30 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     generate
         genvar i;
         for (i=0; i < BATCH_SIZE; ++i) begin : macs
-            vs_fp_mac#(Q) mac(clock, reset_macs_n, a_in[i], b_in[i], result[i]);
+            vs_fp_mac#(Q) mac(bus.clock, reset_macs_n, a_in[i], b_in[i], result[i]);
         end
     endgenerate
 
-    always_ff @(posedge clock) begin
-        if (!reset_n) begin
+    always_ff @(posedge bus.clock) begin
+        if (!bus.reset_n) begin
             state <= IDLE;
             reset_macs_n <= 0;
             row <= 0;
-            read_addr <= 0;
-            done <= 0;
+            bus.read_addr <= 0;
+            bus.done <= 0;
             write_row <= 0;
-            batch_products_transferred <= 0;
+            bus.batch_products_transferred <= 0;
         end
         else begin
             reset_macs_n <= 1;
             batch_compute_done <= 0;
-            batch_products_transferred <= 0;
+            bus.batch_products_transferred <= 0;
             case (state) 
                 IDLE: begin
                     reset_macs_n <= 0;
-                    done <= 0;
-                    if(start) begin
-                        case(command)
+                    bus.done <= 0;
+                    if(bus.start) begin
+                        case(bus.command)
                             COMPUTE_INNER_PRODUCTS: begin
                                 state <= RESIDUAL_LOAD_DELAY;
                                 batch <= 0;
@@ -128,23 +166,23 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                 RESIDUAL_LOAD_DELAY : begin
                     // reset all mac units
                     reset_macs_n <= 0;
-                    read_addr<= read_addr + 1;
+                    bus.read_addr<= bus.read_addr + 1;
                     state <= COMPUTE_PRODUCT;
                 end
                 COMPUTE_PRODUCT : begin
                     if (row == ROWS) begin
                         row <= 0;
-                        read_addr <= 0;
+                        bus.read_addr <= 0;
                         state <= CAPTURE_PRODUCTS;
                     end
                     else begin
                         //$display("read_addr: %d, read_data: %d", read_addr, read_data);
                         for (int i=0;i < BATCH_SIZE; ++i) begin
                             a_in[i] <= phi[row][batch_column_start+i];
-                            b_in[i] <= read_data;
+                            b_in[i] <= bus.read_data;
                         end
                         row <= row + 1;
-                        read_addr<= read_addr + 1;
+                        bus.read_addr<= bus.read_addr + 1;
                     end
                 end
                 CAPTURE_PRODUCTS : begin
@@ -155,7 +193,7 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     // indicate that a batch of inner products has been computed
                     batch_compute_done <= 1;
                     // indicate that inner products haven't yet been transferred to RAM.
-                    batch_products_transferred <= 0;
+                    bus.batch_products_transferred <= 0;
                     if (batch == BATCHES-1)  begin
                         batch <= 0;
                         state <= WAIT_PROD_TRANSFER;
@@ -163,22 +201,22 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     else begin
                         batch <= batch + 1;
                         state <= RESIDUAL_LOAD_DELAY;
-                        read_addr <= 0;
+                        bus.read_addr <= 0;
                     end
                 end
                 WAIT_PROD_TRANSFER : begin
-                    if (batch_products_transferred == 1) begin 
+                    if (bus.batch_products_transferred == 1) begin 
                         state <= IDLE;
-                        done <= 1;
+                        bus.done <= 1;
                         // down this signal. only meant for one clock.
-                        batch_products_transferred <= 0;
+                        bus.batch_products_transferred <= 0;
                     end
                 end
                 /*************************************************
                 Implementation of loading of sensing matrix
                 **************************************************/
                 LOAD_MATRIX : begin : lm
-                    phi[phi_row][phi_col] <= read_data;
+                    phi[phi_row][phi_col] <= bus.read_data;
                     if (phi_row == ROWS - 1) begin : a
                         // move on to next row
                         phi_row <= 0;
@@ -188,7 +226,7 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                             It's time to go back to IDLE state.
                             */
                             state <= IDLE;
-                            done <= 1;
+                            bus.done <= 1;
                             phi_col <= 0;
                         end
                         else begin
@@ -206,24 +244,24 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
 
     // This block is responsible for transferring inner product data
     // into RAM
-    always_ff @(posedge clock) begin
-        if (COMPUTE_INNER_PRODUCTS == command) begin
+    always_ff @(posedge bus.clock) begin
+        if (COMPUTE_INNER_PRODUCTS == bus.command) begin
             if (batch_compute_done == 1) begin
                 write_row <= 0;
-                prod_write_enable <= 1;
-                batch_products_transferred <= 0;
-                if (batch == 1) write_addr <= -1;
+                bus.write_enable <= 1;
+                bus.batch_products_transferred <= 0;
+                if (batch == 1) bus.write_addr <= -1;
             end
-            if (prod_write_enable == 1) begin
+            if (bus.write_enable == 1) begin
                 if (write_row == BATCH_SIZE) begin
-                    prod_write_enable <= 0;
+                    bus.write_enable <= 0;
                 end
                 else begin
-                    write_data <= batch_products[write_row];
-                    write_addr <= write_addr + 1;
+                    bus.write_data <= batch_products[write_row];
+                    bus.write_addr <= bus.write_addr + 1;
                     write_row <= write_row + 1;
                     if (write_row == (BATCH_SIZE - 1)) begin
-                        batch_products_transferred <= 1;
+                        bus.batch_products_transferred <= 1;
                         // $display("batch completed, write_row: %d, write_addr: %d: write_data: %d", 
                         //     write_row, write_addr, write_data);
                     end
