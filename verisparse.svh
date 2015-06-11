@@ -126,6 +126,8 @@ package verisparse;
     typedef enum {
         LOAD_SENSING_MATRIX,
         COMPUTE_INNER_PRODUCTS,
+        LOAD_ATOM_SCALE_FACTOR,
+        SUBTRACT_SCALED_ATOM_FROM_DATA,
         COMPUTE_APPROXIMATION
     }vs_dict_proc_command_t;
 

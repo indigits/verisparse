@@ -1,5 +1,6 @@
 `include "verisparse.svh"
 
+//`define DICT_PROC_DEBUG
 
 
 interface vs_dict_proc_if(
@@ -94,12 +95,17 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     COMPUTE_PRODUCT, // mac units are in action and inner products are being computed
     CAPTURE_PRODUCTS, // inner products are being transferred to local registers
     WAIT_PROD_TRANSFER, // inner products are still being transferred to RAM.
+    LOADING_ATOM_SCALE_FACTOR, // loading the atom index and scale factor.
 
 
     // states for loading sensing matrix
     LOAD_MATRIX
     } states_t;
 
+    typedef enum{
+        LASF_LOAD_ATOM_LOCATION,
+        LASF_LOAD_ATOM_SCALE_FACTOR
+    } lasf_states_t;
 
 
     fp_32_t phi[ROWS][COLUMNS];
@@ -108,8 +114,14 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     fp_32_t b_in[BATCH_SIZE];
     fp_32_t result[BATCH_SIZE];
 
+    /**
+    Current command to be executed by the processor
+    */
+    vs_dict_proc_command_t current_command;
+
     logic reset_macs_n;
     states_t state = IDLE;
+    lasf_states_t lasf_state;
     int batch  = 0;
     int batch_column_start = 0;
     int row = 0;
@@ -117,6 +129,9 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     int write_row = 0;
     int phi_row = 0;
     int phi_col = 0;
+
+    int atom_index;
+    fp_32_t atom_scale_factor;
 
     always_comb begin
         batch_column_start  = batch * BATCH_SIZE;
@@ -143,19 +158,29 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
         else begin
             reset_macs_n <= 1;
             batch_compute_done <= 0;
-            bus.batch_products_transferred <= 0;
             case (state) 
                 IDLE: begin
                     reset_macs_n <= 0;
                     bus.done <= 0;
                     if(bus.start) begin
+                        current_command <= bus.command;
                         case(bus.command)
                             COMPUTE_INNER_PRODUCTS: begin
+`ifdef DICT_PROC_DEBUG
+                                $display("DICT_PROC: Initiating inner product computation");
+`endif
                                 state <= RESIDUAL_LOAD_DELAY;
                                 batch <= 0;
                             end
                             LOAD_SENSING_MATRIX : begin
                                 state <= LOAD_MATRIX;
+                            end
+                            LOAD_ATOM_SCALE_FACTOR : begin
+`ifdef DICT_PROC_DEBUG
+                                $display("DICT_PROC: Loading atom scale factor");
+`endif
+                                state <= LOADING_ATOM_SCALE_FACTOR;
+                                lasf_state <= LASF_LOAD_ATOM_LOCATION;
                             end
                         endcase
                     end
@@ -174,6 +199,9 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         row <= 0;
                         bus.read_addr <= 0;
                         state <= CAPTURE_PRODUCTS;
+`ifdef DICT_PROC_DEBUG
+                        $display("DICT_PROC: Inner product batch computation completed.");
+`endif
                     end
                     else begin
                         //$display("read_addr: %d, read_data: %d", read_addr, read_data);
@@ -190,17 +218,24 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     for (int i=0;i < BATCH_SIZE; ++i) begin
                         batch_products[i] <= result[i];
                     end
+`ifdef DICT_PROC_DEBUG
+                    $display("DICT_PROC: Inner product batch capture completed.");
+`endif
                     // indicate that a batch of inner products has been computed
                     batch_compute_done <= 1;
-                    // indicate that inner products haven't yet been transferred to RAM.
-                    bus.batch_products_transferred <= 0;
                     if (batch == BATCHES-1)  begin
                         batch <= 0;
                         state <= WAIT_PROD_TRANSFER;
+`ifdef DICT_PROC_DEBUG
+                        $display("DICT_PROC: Waiting for final product transfers to complete.");
+`endif
                     end
                     else begin
                         batch <= batch + 1;
                         state <= RESIDUAL_LOAD_DELAY;
+`ifdef DICT_PROC_DEBUG
+                        $display("DICT_PROC: Moving on to next batch.");
+`endif
                         bus.read_addr <= 0;
                     end
                 end
@@ -210,6 +245,9 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         bus.done <= 1;
                         // down this signal. only meant for one clock.
                         bus.batch_products_transferred <= 0;
+`ifdef DICT_PROC_DEBUG
+                        $display("DICT_PROC: All inner products transferred.");
+`endif
                     end
                 end
                 /*************************************************
@@ -238,6 +276,19 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         phi_row <= phi_row + 1;
                     end : b
                 end : lm
+                LOADING_ATOM_SCALE_FACTOR : begin : lasf
+                    case(lasf_state) 
+                        LASF_LOAD_ATOM_LOCATION : begin
+                            atom_index <= bus.read_data;
+                            lasf_state <= LASF_LOAD_ATOM_SCALE_FACTOR;
+                        end
+                        LASF_LOAD_ATOM_SCALE_FACTOR : begin
+                            state <= IDLE;
+                            atom_scale_factor <= bus.read_data;
+                            bus.done <= 1;
+                        end
+                    endcase
+                end : lasf
             endcase
         end
     end
@@ -245,11 +296,11 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     // This block is responsible for transferring inner product data
     // into RAM
     always_ff @(posedge bus.clock) begin
-        if (COMPUTE_INNER_PRODUCTS == bus.command) begin
+        if (COMPUTE_INNER_PRODUCTS == current_command) begin
+            bus.batch_products_transferred <= 0;
             if (batch_compute_done == 1) begin
                 write_row <= 0;
                 bus.write_enable <= 1;
-                bus.batch_products_transferred <= 0;
                 if (batch == 1) bus.write_addr <= -1;
             end
             if (bus.write_enable == 1) begin
@@ -262,8 +313,10 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     write_row <= write_row + 1;
                     if (write_row == (BATCH_SIZE - 1)) begin
                         bus.batch_products_transferred <= 1;
-                        // $display("batch completed, write_row: %d, write_addr: %d: write_data: %d", 
-                        //     write_row, write_addr, write_data);
+`ifdef DICT_PROC_DEBUG
+                        $display("batch completed, write_row: %d, write_addr: %d: write_data: %d", 
+                            write_row, bus.write_addr, bus.write_data);
+`endif
                     end
                 end
             end

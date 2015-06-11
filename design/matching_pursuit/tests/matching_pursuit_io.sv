@@ -146,7 +146,7 @@ module matching_pursuit_io(input clock,
         // load the sensing matrix
         PE.dict_proc_bus.command = LOAD_SENSING_MATRIX;
         // we need to provide data from the sensing matrix
-        PE.proc_read_select = 1;
+        PE.main_loop_bus.dict_proc_read_a_select = 1;
         PE.dict_bus.read_addr = 0;
         @(posedge clock);
         // initiate transfer of sensing matrix
@@ -230,6 +230,9 @@ module matching_pursuit_io(input clock,
         $display("Printing inner products.");
         print_inner_product_ram();
         print_max_ident_result();
+        $display("scale factor: location: %d, value: %f",
+            PE.dict_processor.atom_index,
+            vs_fixed_to_real(PE.dict_processor.atom_scale_factor));
         // wait for the loop done pin to go low.
         wait(~PE.main_loop_bus.done);
     endtask 
