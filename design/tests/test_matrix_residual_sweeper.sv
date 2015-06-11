@@ -7,8 +7,8 @@ import vs_util::*;
 module test_matrix_residual_sweeper;
     logic clock = 1;
     logic reset_n = 0;
-    logic start;
-    logic done;
+
+    vs_dict_proc_if bus(clock, reset_n);
 
     parameter ROWS = 4;
     parameter COLUMNS = 8;
@@ -48,8 +48,6 @@ module test_matrix_residual_sweeper;
     logic [15:0] phi_write_addr;
     logic[FP_DATA_BUS_WIDTH-1:0]  phi_in_data;
     logic[FP_DATA_BUS_WIDTH-1:0]  phi_out_data;
-    bit batch_products_transferred;
-    vs_sensing_matrix_command_t command;
 
     vs_single_clock_synchronous_ram #(32, 16) sensing_matrix(
         .clock(clock),
@@ -60,19 +58,13 @@ module test_matrix_residual_sweeper;
         .out_data(phi_out_data));
 
 
-    logic[FP_DATA_BUS_WIDTH-1:0]  proc_read_data;
     logic proc_read_select = 0;
     vs_mux_2x1 #(FP_DATA_BUS_WIDTH) processor_read_data_mux(proc_read_select,
             res_out_data, phi_out_data,
-            proc_read_data
+            bus.proc_read_data
         );
 
-    vs_sensing_matrix_processor #(ROWS, COLUMNS, 0, BATCH_SIZE) uut(
-        clock, reset_n, 
-        res_read_addr, proc_read_data,
-        prod_write_enable, prod_write_addr, prod_in_data,
-        command, start, done, 
-        batch_products_transferred);
+    vs_sensing_matrix_processor #(ROWS, COLUMNS, 0, BATCH_SIZE) uut(bus);
 
     byte max_location;
     fp_32_t max_value;
@@ -83,7 +75,7 @@ module test_matrix_residual_sweeper;
         prod_read_addr, prod_out_data,
         max_location, 
         max_value,
-        batch_products_transferred,
+        bus.batch_products_transferred,
         max_unit_batch_done
         );
 
@@ -128,18 +120,18 @@ module test_matrix_residual_sweeper;
         reset_n = 1;
 
         // load the sensing matrix
-        command = LOAD_SENSING_MATRIX;
+        bus.command = LOAD_SENSING_MATRIX;
         // we need to provide data from the sensing matrix
         proc_read_select = 1;
         phi_read_addr = 0;
         @(posedge clock);
         // initiate transfer of sensing matrix
-        start = 1;
+        bus.start = 1;
         // wait for next clock edge
         @(posedge clock);
         $display("Start signal sent for loading matrix");
-        start = 0;
-        while (!done) begin
+        bus.start = 0;
+        while (!bus.done) begin
             phi_read_addr = phi_read_addr + 1;
             // $display("read addr: %d, data: %d, %d", 
             //     phi_read_addr, phi_out_data, 
@@ -148,24 +140,24 @@ module test_matrix_residual_sweeper;
         end
         // the computation must have started
         // wait for the computation to complete
-        wait(done);
+        wait(bus.done);
         // now verify everything.
         $display("Matrix load completed");
         print_phi();
 
 
         // start the computation
-        command = COMPUTE_INNER_PRODUCTS;
+        bus.command = COMPUTE_INNER_PRODUCTS;
         // we need to send data from residual memory
         proc_read_select = 0;
-        start = 1;
+        bus.start = 1;
         // wait for next clock edge
         @(posedge clock);
         $display("Start signal sent for sweeping");
-        start = 0;
+        bus.start = 0;
         // the computation must have started
         // wait for the computation to complete
-        wait(done);
+        wait(bus.done);
         // now verify everything.
         $display("Sweep completed");
         wait(max_unit_batch_done);

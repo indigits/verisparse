@@ -33,7 +33,7 @@ interface vs_dict_proc_if(
     logic [7:0] write_addr;
     logic[FP_DATA_BUS_WIDTH-1:0]  write_data;
 
-    vs_sensing_matrix_command_t command;
+    vs_dict_proc_command_t command;
     logic start; 
     logic done;
     logic batch_products_transferred;

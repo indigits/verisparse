@@ -96,11 +96,6 @@ package verisparse;
     } pursuit_bus_t;
 
 
-    typedef enum {
-        LOAD_SENSING_MATRIX,
-        COMPUTE_INNER_PRODUCTS,
-        COMPUTE_APPROXIMATION
-    }vs_sensing_matrix_command_t;
 
 
     typedef struct {
@@ -128,6 +123,11 @@ package verisparse;
         return  real'(value) * FIXED_TO_FLOAT_FACTOR_DEFAULT;  
     endfunction
 
+    typedef enum {
+        LOAD_SENSING_MATRIX,
+        COMPUTE_INNER_PRODUCTS,
+        COMPUTE_APPROXIMATION
+    }vs_dict_proc_command_t;
 
 endpackage
 import verisparse::*;
