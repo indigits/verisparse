@@ -92,14 +92,13 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     // states for computing inner product
 
     RESIDUAL_LOAD_DELAY, // one cycle required for introducing the delay for loading from residual memory
-    COMPUTE_PRODUCT, // mac units are in action and inner products are being computed
-    CAPTURE_PRODUCTS, // inner products are being transferred to local registers
+    COMPUTING_PRODUCT, // mac units are in action and inner products are being computed
+    CAPTURING_PRODUCTS, // inner products are being transferred to local registers
     WAIT_PROD_TRANSFER, // inner products are still being transferred to RAM.
     LOADING_ATOM_SCALE_FACTOR, // loading the atom index and scale factor.
-
-
+    SUBTRACTING_SCALED_ATOM_FROM_DATA, // subtracting a scaled atom from data
     // states for loading sensing matrix
-    LOAD_MATRIX
+    LOADING_MATRIX
     } states_t;
 
     typedef enum{
@@ -107,6 +106,12 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
         LASF_LOAD_ATOM_SCALE_FACTOR
     } lasf_states_t;
 
+    typedef enum{
+        SSAFD_A,
+        SSAFD_B,
+        SSAFD_C,
+        SSAFD_D
+    }ssafd_states_t;
 
     fp_32_t phi[ROWS][COLUMNS];
     fp_32_t batch_products[BATCH_SIZE];
@@ -120,8 +125,13 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
     vs_dict_proc_command_t current_command;
 
     logic reset_macs_n;
+
+
     states_t state = IDLE;
     lasf_states_t lasf_state;
+    // State for the process of subtracting a scaled atom from data
+    ssafd_states_t ssafd_state;
+
     int batch  = 0;
     int batch_column_start = 0;
     int row = 0;
@@ -137,6 +147,16 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
         batch_column_start  = batch * BATCH_SIZE;
     end
 
+    // implements result = a - scale * b;
+    function automatic fp_32_t scale_sub(fp_32_t a, fp_32_t b, fp_32_t scale);
+        fp_64_t  a2 = fp_64_t'(a);
+        fp_64_t scale2 = fp_64_t'(scale);
+        fp_64_t b2 = fp_64_t'(b);
+        a2 = a2 - ((scale2*b2) >> Q);
+        //$display("DP: a: %f, b: %f, a': %f", vs_fixed_to_real(a), 
+        //    vs_fixed_to_real(b), vs_fixed_to_real(fp_32_t'(a2)));
+        return fp_32_t'(a2);
+    endfunction
 
     generate
         genvar i;
@@ -162,25 +182,31 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                 IDLE: begin
                     reset_macs_n <= 0;
                     bus.done <= 0;
+                    row <= 0;
+                    bus.read_addr <= 0;
                     if(bus.start) begin
                         current_command <= bus.command;
                         case(bus.command)
                             COMPUTE_INNER_PRODUCTS: begin
 `ifdef DICT_PROC_DEBUG
-                                $display("DICT_PROC: Initiating inner product computation");
+                                $display("DP: Initiating inner product computation");
 `endif
                                 state <= RESIDUAL_LOAD_DELAY;
                                 batch <= 0;
                             end
                             LOAD_SENSING_MATRIX : begin
-                                state <= LOAD_MATRIX;
+                                state <= LOADING_MATRIX;
                             end
                             LOAD_ATOM_SCALE_FACTOR : begin
 `ifdef DICT_PROC_DEBUG
-                                $display("DICT_PROC: Loading atom scale factor");
+                                $display("DP: Loading atom scale factor");
 `endif
                                 state <= LOADING_ATOM_SCALE_FACTOR;
                                 lasf_state <= LASF_LOAD_ATOM_LOCATION;
+                            end
+                            SUBTRACT_SCALED_ATOM_FROM_DATA : begin
+                                state <= SUBTRACTING_SCALED_ATOM_FROM_DATA;
+                                ssafd_state <= SSAFD_A;
                             end
                         endcase
                     end
@@ -192,15 +218,15 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     // reset all mac units
                     reset_macs_n <= 0;
                     bus.read_addr<= bus.read_addr + 1;
-                    state <= COMPUTE_PRODUCT;
+                    state <= COMPUTING_PRODUCT;
                 end
-                COMPUTE_PRODUCT : begin
+                COMPUTING_PRODUCT : begin
                     if (row == ROWS) begin
                         row <= 0;
                         bus.read_addr <= 0;
-                        state <= CAPTURE_PRODUCTS;
+                        state <= CAPTURING_PRODUCTS;
 `ifdef DICT_PROC_DEBUG
-                        $display("DICT_PROC: Inner product batch computation completed.");
+                        $display("DP: Inner product batch computation completed.");
 `endif
                     end
                     else begin
@@ -213,13 +239,16 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         bus.read_addr<= bus.read_addr + 1;
                     end
                 end
-                CAPTURE_PRODUCTS : begin
+                CAPTURING_PRODUCTS : begin
                     // transfer all mac results immediately
                     for (int i=0;i < BATCH_SIZE; ++i) begin
-                        batch_products[i] <= result[i];
+`ifdef DICT_PROC_DEBUG
+                    // $display("DP: product[%d] %f.", batch_column_start+i,
+                    //     vs_fixed_to_real(result[i]));
+`endif                        batch_products[i] <= result[i];
                     end
 `ifdef DICT_PROC_DEBUG
-                    $display("DICT_PROC: Inner product batch capture completed.");
+                    $display("DP: Inner product batch capture completed.");
 `endif
                     // indicate that a batch of inner products has been computed
                     batch_compute_done <= 1;
@@ -227,14 +256,14 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         batch <= 0;
                         state <= WAIT_PROD_TRANSFER;
 `ifdef DICT_PROC_DEBUG
-                        $display("DICT_PROC: Waiting for final product transfers to complete.");
+                        $display("DP: Waiting for final product transfers to complete.");
 `endif
                     end
                     else begin
                         batch <= batch + 1;
                         state <= RESIDUAL_LOAD_DELAY;
 `ifdef DICT_PROC_DEBUG
-                        $display("DICT_PROC: Moving on to next batch.");
+                        $display("DP: Moving on to next batch.");
 `endif
                         bus.read_addr <= 0;
                     end
@@ -246,14 +275,14 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         // down this signal. only meant for one clock.
                         bus.batch_products_transferred <= 0;
 `ifdef DICT_PROC_DEBUG
-                        $display("DICT_PROC: All inner products transferred.");
+                        $display("DP: All inner products transferred.");
 `endif
                     end
                 end
                 /*************************************************
                 Implementation of loading of sensing matrix
                 **************************************************/
-                LOAD_MATRIX : begin : lm
+                LOADING_MATRIX : begin : lm
                     phi[phi_row][phi_col] <= bus.read_data;
                     if (phi_row == ROWS - 1) begin : a
                         // move on to next row
@@ -289,6 +318,35 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                         end
                     endcase
                 end : lasf
+                SUBTRACTING_SCALED_ATOM_FROM_DATA : begin
+                    case (ssafd_state) 
+                        SSAFD_A: begin
+                            bus.read_addr <= 0;
+                            bus.write_addr <= -1;
+                            bus.write_enable <= 1;
+                            ssafd_state <= SSAFD_B;
+                            row <= 0;
+                        end
+                        SSAFD_B : begin
+                            bus.read_addr <= bus.read_addr + 1;
+                            ssafd_state <= SSAFD_C;
+                        end
+                        SSAFD_C : begin 
+                            bus.read_addr <= bus.read_addr + 1;
+                            bus.write_data <= scale_sub(fp_32_t'(bus.read_data), phi[row][atom_index], atom_scale_factor);
+                            bus.write_addr <= bus.write_addr + 1;
+                            row <= row + 1;
+                            if (row == ROWS - 1) begin
+                                ssafd_state <= SSAFD_D;
+                            end
+                        end
+                        SSAFD_D : begin
+                            state <= IDLE;
+                            bus.write_enable <= 0;
+                            bus.done <= 1;
+                        end
+                    endcase 
+                end
             endcase
         end
     end
@@ -314,7 +372,7 @@ module vs_sensing_matrix_processor #(parameter ROWS=64,
                     if (write_row == (BATCH_SIZE - 1)) begin
                         bus.batch_products_transferred <= 1;
 `ifdef DICT_PROC_DEBUG
-                        $display("batch completed, write_row: %d, write_addr: %d: write_data: %d", 
+                        $display("DPT: batch completed, write_row: %d, write_addr: %d: write_data: %d", 
                             write_row, bus.write_addr, bus.write_data);
 `endif
                     end
@@ -368,6 +426,9 @@ module vs_max_identifier #(parameter BATCH_SIZE=64) (
             state <= IDLE;
             max_value <= 0;
             cur_value <= 0;
+            abs_max_value <= 0;
+            batch_counter <= 0;
+            counter <= 0;
         end
         else begin
             case(state) 
@@ -387,12 +448,15 @@ module vs_max_identifier #(parameter BATCH_SIZE=64) (
                     state <= COMPUTE_MAX;
                 end
                 COMPUTE_MAX : begin
-                    //$display("addr: %d, max: %d", read_addr, fp_32_t'(read_data));
+                    // $display("DP_MAX: addr: %d, cur: %f", 
+                    //     read_addr, vs_fixed_to_real(fp_32_t'(read_data)));
                     cur_value <= fp_32_t'(read_data);
                     if (abs_value > abs_max_value) begin
                         location <= counter - 1;
                         abs_max_value <= abs_value;
                         max_value <= cur_value;
+                        // $display("DP_MAX NEW: %d, %f", counter -1 , 
+                        //     vs_fixed_to_real(cur_value));
                     end
                     counter <= counter + 1;
                     if (batch_counter == BATCH_SIZE-1) begin

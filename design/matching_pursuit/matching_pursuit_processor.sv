@@ -109,6 +109,11 @@ interface vs_matching_pursuit_main_loop_bus_if ();
     */
     logic[FP_DATA_BUS_WIDTH-1:0]  dict_proc_direct_feed;
 
+    /**
+    Resets the max unit at the beginning of sweep
+    */
+    logic reset_abs_max_unit_n;
+
 
     modport processor(
         input start,
@@ -118,7 +123,8 @@ interface vs_matching_pursuit_main_loop_bus_if ();
         output residual_write_addr,
         output residual_write_data,
         output dict_proc_read_a_select,
-        output dict_proc_direct_feed);
+        output dict_proc_direct_feed,
+        output reset_abs_max_unit_n);
     modport driver(
         output start,
         input done,
@@ -157,7 +163,8 @@ module vs_matching_pursuit_main_loop(
         UR_LOAD_LOCATION,
         UR_LOAD_VALUE,
         UR_START_RESIDUAL_UPDATE,
-        UR_WAIT_RESIDUAL_UPDATE
+        UR_WAIT_RESIDUAL_UPDATE_A,
+        UR_WAIT_RESIDUAL_UPDATE_B
     }update_residual_states_t;
 
     const int cycles = 2;
@@ -179,25 +186,28 @@ module vs_matching_pursuit_main_loop(
                 IDLE: begin
                     if (bus.start) begin
 `ifdef MAIN_LOOP_DEBUG
-                        $display("Starting loop iteration");
+                        $display("MPML: Starting loop iteration");
 `endif
                         dict_proc_bus.command <= COMPUTE_INNER_PRODUCTS;
                         dict_proc_bus.start <= 1;
                         state <= SWEEP_PRE;
                         bus.dict_proc_read_a_select <= 0;
+                        bus.dict_proc_output_a_select <= 0;
+                        bus.reset_abs_max_unit_n <= 0;
                     end
                     bus.done <= 0;
                 end
                 SWEEP_PRE: begin
                     // lower the start pin
                     dict_proc_bus.start <= 0;
+                        bus.reset_abs_max_unit_n <= 1;
                     state <= SWEEP;
                 end
                 SWEEP : begin
                     // wait for inner products to be computed
                     if (dict_proc_bus.done) begin
 `ifdef MAIN_LOOP_DEBUG
-                        $display("Sweep completed");
+                        $display("MPML: Sweep completed");
 `endif
                         // The loop has been processed
                         state <= IDENTIFY_MAX;
@@ -206,7 +216,7 @@ module vs_matching_pursuit_main_loop(
                 IDENTIFY_MAX : begin
                     if (max_ident_bus.batch_done) begin
 `ifdef MAIN_LOOP_DEBUG
-                        $display("Max has been identified");
+                        $display("MPML: Max has been identified");
 `endif
                         state <= UPDATE_SUPPORT;
                         update_support_state <= US_SET_X_READ_ADDR;
@@ -218,7 +228,7 @@ module vs_matching_pursuit_main_loop(
                             x_bus.read_addr <= max_ident_bus.location;
                             update_support_state <= US_READ_X_VALUE;
 `ifdef MAIN_LOOP_DEBUG
-                            $display("current x value: %f",
+                            $display("MPML: current x value: %f",
                                 vs_fixed_to_real(int'(PE.x_ram.ram[max_ident_bus.location])));
 `endif
                         end
@@ -234,7 +244,12 @@ module vs_matching_pursuit_main_loop(
                         end
                         US_MOVE_TO_NEXT_STEP : begin
                             x_bus.write_enable <= 0;
+`ifdef MAIN_LOOP_DEBUG
+                            $display("MPML: updated x value: %f",
+                                vs_fixed_to_real(int'(PE.x_ram.ram[max_ident_bus.location])));
+`endif
                             state <= UPDATE_RESIDUAL;
+                            update_residual_state <= UR_START_SCALE_FACTOR_LOAD;
                         end
                     endcase
                 end
@@ -243,7 +258,7 @@ module vs_matching_pursuit_main_loop(
                         // The loop has been processed
                         state <= UPDATE_RESIDUAL;
                         dummy_counter <= cycles;
-                        // $display("updated x value: %f",
+                        // $display("MPML: updated x value: %f",
                         //     vs_fixed_to_real(int'(PE.x_ram.ram[max_ident_bus.location])));
                     end
                     else begin
@@ -271,15 +286,28 @@ module vs_matching_pursuit_main_loop(
                             update_residual_state <= UR_START_RESIDUAL_UPDATE;
                         end
                         UR_START_RESIDUAL_UPDATE : begin
-                            update_residual_state <= UR_WAIT_RESIDUAL_UPDATE;
+                            dict_proc_bus.command <= SUBTRACT_SCALED_ATOM_FROM_DATA;
+                            dict_proc_bus.start <= 1;
+                            bus.dict_proc_output_a_select <= 1;
+                            bus.dict_proc_read_a_select <= 0;
+                            update_residual_state <= UR_WAIT_RESIDUAL_UPDATE_A;
+`ifdef MAIN_LOOP_DEBUG
+                                $display("MPML: Initiated residual update.");
+`endif
                         end
-                        UR_WAIT_RESIDUAL_UPDATE : begin
-                            // The loop has been processed
-                            state <= IDLE;
-                            bus.done <= 1;
-    `ifdef MAIN_LOOP_DEBUG
-                            $display("Loop iteration completed.");
-    `endif
+                        UR_WAIT_RESIDUAL_UPDATE_A : begin
+                            dict_proc_bus.start <= 0;
+                            update_residual_state <= UR_WAIT_RESIDUAL_UPDATE_B;
+                        end
+                        UR_WAIT_RESIDUAL_UPDATE_B : begin
+                            if (dict_proc_bus.done) begin
+                                // The loop has been processed
+                                state <= IDLE;
+                                bus.done <= 1;
+`ifdef MAIN_LOOP_DEBUG
+                                $display("MPML: Loop iteration completed.");
+`endif
+                            end
                         end 
                     endcase
                 end
@@ -518,7 +546,7 @@ module matching_pursuit_chip(input clock,
     vs_abs_max_identifier_if max_ident_bus(clock);
 
     vs_max_identifier #(BATCH_SIZE) max_unit(
-        clock, reset_n, 
+        clock, main_loop_bus.reset_abs_max_unit_n, 
         product_bus.read_addr, product_bus.read_data,
         max_ident_bus.location, 
         max_ident_bus.value,

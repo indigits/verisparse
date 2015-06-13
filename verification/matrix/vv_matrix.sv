@@ -241,6 +241,30 @@ class Matrix #(int Q=15);
         return m;
     endfunction
 
+    static function Matrix#(Q) from_file(int rows, int cols, string file_path);
+        integer file_id;
+        integer byte_count;
+        int size = rows*cols*4;
+        uint8_t buffer[] = new[size];
+        uint8_t tmp_buf[32];
+        int read_bytes = 0;
+        file_id = $fopen(file_path, "rb");
+        while (read_bytes < size) begin
+            byte_count = $fread(tmp_buf, file_id);
+            for (int i=0; i < byte_count; ++i) begin
+                buffer[read_bytes + i] = tmp_buf[i];
+            end
+            read_bytes += byte_count;
+            if (byte_count == 0) begin
+                break;
+            end
+        end
+        $display("File: %s, Buffer size: %d bytes, Read: %d bytes", 
+            file_path, buffer.size(), read_bytes);
+        $fclose(file_id);
+        return from_byte_array_cw(rows, cols, buffer);
+    endfunction : from_file
+
     static function Matrix#(Q) from_data(int rows, int cols, 
         ref int data[]);
         Matrix#(Q) m = new(rows, cols);
@@ -320,6 +344,14 @@ class Matrix #(int Q=15);
         return m;
     endfunction
 
+    function Matrix#(Q) sub_scaled(ref Matrix#(Q) other, int scale);
+        Matrix#(Q) m = new(m_rows, m_cols);
+        int n = size();
+        for (int i=0;i < n ; ++i) 
+            m.m_data[i] = m_data[i] - ((scale * other.m_data[i]) >> FRACTION_BITS);
+        return m;
+    endfunction
+
     function bit eq(ref Matrix#(Q) other);
         int n = size();
         for (int i=0;i < n ; ++i) 
@@ -334,6 +366,13 @@ class Matrix #(int Q=15);
             for (int r=0; r < m_rows; ++r)
                 m.set(c, r, get(r, c));
         return m;
+    endfunction
+
+    function void mul_scalar(int factor);
+        int n = size();
+        longint factor2  = longint'(factor);
+        for (int i=0;i < n ; ++i) 
+            m_data[i] = int'((longint'(m_data[i]) * factor2) >> FRACTION_BITS);
     endfunction
 
     function Matrix#(Q) mul(ref Matrix#(Q) other);
@@ -402,18 +441,102 @@ class Matrix #(int Q=15);
 
     /******************************************
      *
+     *      Statistics functions
+     *
+     ******************************************/
+     function int max_scalar(ref int r, ref int c);
+        int max_value;
+        int cur_value;
+        for (int rr=0; rr< m_rows; ++rr)
+            for (int cc=0; cc<m_cols; ++cc) begin
+                cur_value = this.get(rr, cc);
+                if (cur_value > max_value) begin
+                    max_value = cur_value;
+                    r = rr;
+                    c = cc;
+                end
+            end
+        return max_value;
+     endfunction
+
+
+     function int abs_max_scalar(ref int r, ref int c);
+        int abs_max_value = 0;
+        int max_value = 0;
+        int cur_value;
+        int abs_cur_value;
+        for (int rr=0; rr< m_rows; ++rr)
+            for (int cc=0; cc<m_cols; ++cc) begin
+                cur_value = this.get(rr, cc);
+                abs_cur_value = cur_value > 0 ? cur_value : -cur_value;
+                if (abs_cur_value > abs_max_value) begin
+                    abs_max_value = abs_cur_value;
+                    max_value = cur_value;
+                    r = rr;
+                    c = cc;
+                end
+            end
+        return max_value;
+     endfunction
+
+     function int sum_squared();
+        longint energy = 0;
+        int cur_value;
+        for (int rr=0; rr< m_rows; ++rr)
+            for (int cc=0; cc<m_cols; ++cc) begin
+                cur_value = this.get(rr, cc);
+                energy += longint'(cur_value * cur_value);
+            end
+        return (energy >> FRACTION_BITS);
+     endfunction
+
+     function Matrix#(Q) sum_squared_cw();
+        Matrix#(Q) result = new(m_cols, 1);
+        for (int cc=0; cc<m_cols; ++cc)  begin
+            longint energy = 0;
+            int cur_value;
+            for (int rr=0; rr< m_rows; ++rr) begin
+                cur_value = this.get(rr, cc);
+                energy += longint'(cur_value * cur_value);
+            end
+            result.set(cc, 0, (energy >> FRACTION_BITS));
+        end
+        return result;
+     endfunction
+
+     function Matrix#(0)  support();
+        int n = 0;
+        int sz = m_data.size();
+        Matrix#(0) result;
+        for (int i=0;i < sz ; ++i) begin
+            if(m_data[i] != 0) n = n+1;
+        end
+        result = Matrix#(0)::new(n, 1);
+        for (int i=0, j=0;i < sz ; ++i) begin
+            if(m_data[i] != 0) begin
+                result.set(j, 0, i);
+                j  = j + 1;
+            end
+        end
+        return result;
+     endfunction 
+
+    /******************************************
+     *
      *      Debugging functions
      *
      ******************************************/
 
-    function void print();
+    function void print(int rows = -1, int cols = -1);
         int index;
         int value;
         string value_str;
-        for (int r=0; r<m_rows; ++r)
+        if (rows < 0 ) rows = m_rows;
+        if (cols < 0) cols = m_cols;
+        for (int r=0; r<rows; ++r)
         begin
             index = cell_to_index(r,0);
-            for(int c=0; c<m_cols; ++c)
+            for(int c=0; c<cols; ++c)
             begin
                 value = m_data[index];
                 fixed_to_string(value, value_str);
@@ -425,8 +548,23 @@ class Matrix #(int Q=15);
         $write("\n");
     endfunction
 
+    function void print_vector();
+        int n = m_data.size();
+        int value;
+        string value_str;
+        for (int i=0; i < n; ++i) begin
+            if (i & 'hf == 0) begin
+                $write("\n");
+            end
+            value = m_data[i];
+            fixed_to_string(value, value_str);
+            $write("%s ", value_str);
+        end
+        $write("\n");
+    endfunction 
 
-    static function fixed_to_string(int value, output string result);
+
+    static function void fixed_to_string(int value, output string result);
         string sgn_str, int_str, frac_str;
         bit[30 - Q: 0] integral;
         int fraction;
